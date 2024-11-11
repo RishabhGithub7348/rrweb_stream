@@ -1,21 +1,52 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef, useState } from 'react';
 import rrwebPlayer from 'rrweb-player';
 import 'rrweb-player/dist/style.css';
-import { eventWithTime } from '@rrweb/types';
+import type { eventWithTime } from '@rrweb/types';
 import SocketService from '../lib/socketService';
+
+// Custom styles for fullscreen player
+const styles = `
+  .rr-player {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .rr-player__frame {
+    width: 100% !important;
+    height: 100% !important;
+  }
+  .rr-controller {
+    display: none !important;
+  }
+`;
 
 const Viewer: React.FC = () => {
   const [isViewerConnected, setIsViewerConnected] = useState(false);
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<eventWithTime[]>([]);
+
+  useEffect(() => {
+    // Add custom styles
+    const styleSheet = document.createElement('style');
+    styleSheet.textContent = styles;
+    document.head.appendChild(styleSheet);
+
+    return () => {
+      document.head.removeChild(styleSheet);
+    };
+  }, []);
+
   const socket = SocketService.getInstance();
 
   useEffect(() => {
-    // Initial event setup
+    // Initial event to set up the viewer
     const initialEvent: eventWithTime = {
-      type: 4,
+      type: 4, // Full snapshot
       data: {
         href: window.location.href,
         width: window.innerWidth,
@@ -25,9 +56,10 @@ const Viewer: React.FC = () => {
     };
 
     eventsRef.current = [initialEvent];
+    console.log(eventsRef.current)
 
     if (containerRef.current) {
-      // Initialize player with optimized settings
+      // Initialize the rrweb player
       const player = new rrwebPlayer({
         target: containerRef.current,
         props: {
@@ -37,42 +69,33 @@ const Viewer: React.FC = () => {
           autoPlay: true,
           speed: 1,
           showController: false,
-          UNSAFE_replayCanvas: true,
+          UNSAFE_replayCanvas: true, // Enable canvas replay
           liveMode: true,
-          mouseTail: {
-            duration: 500,
-            lineCap: 'round',
-            lineWidth: 3,
-            strokeStyle: '#ff5722'
-          },
-          // Optimize performance
-          skipInactive: true,
-          showWarning: false,
-          triggerFocus: false,
+          mouseTail: true,
+          showWarning: false
         },
       });
 
       playerRef.current = player;
 
-      // Handle batched events
-      const handleEvents = (events: eventWithTime[]) => {
-        if (!playerRef.current) return;
-
-        events.forEach(event => {
+      // Handle incoming events including canvas mutations
+      socket.on('record-event', (event: eventWithTime) => {
+        if (playerRef.current) {
+          // Add the event to our event list
           eventsRef.current.push({
             ...event,
             timestamp: Date.now(),
           });
           
+          // Add the event to the player
+          // The player will automatically handle canvas mutations
           playerRef.current.getReplayer().addEvent({
             ...event,
             timestamp: Date.now(),
           });
-        });
-      };
+        }
+      });
 
-      // Set up socket listeners
-      socket.on('record-events', handleEvents);
       socket.emit('start-viewing');
       setIsViewerConnected(true);
 
@@ -83,19 +106,22 @@ const Viewer: React.FC = () => {
         }
       };
 
-      const resizeObserver = new ResizeObserver(handleResize);
-      resizeObserver.observe(containerRef.current);
+      window.addEventListener('resize', handleResize);
 
       return () => {
-        socket.off('record-events');
-        resizeObserver.disconnect();
+        socket.off('record-event');
+        window.removeEventListener('resize', handleResize);
         if (playerRef.current) {
-          playerRef.current.getReplayer().destroy();
+          const replayer = playerRef.current.getReplayer();
+          if (replayer) {
+            replayer.destroy();
+          }
         }
         setIsViewerConnected(false);
       };
     }
   }, [socket]);
+  console.log(eventsRef.current)
 
   return (
     <div ref={containerRef} className="fixed inset-0">
@@ -108,4 +134,4 @@ const Viewer: React.FC = () => {
   );
 };
 
-export default Viewer
+export default Viewer;
