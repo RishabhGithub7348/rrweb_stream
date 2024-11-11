@@ -1,55 +1,56 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 import { useEffect, useRef } from 'react';
-import * as rrweb from 'rrweb'; // Importing rrweb as a namespace
-import { RRWebPluginCanvasWebRTCRecord } from '@rrweb/rrweb-plugin-canvas-webrtc-record';
+import * as rrweb from 'rrweb';
 import SocketService from '../lib/socketService';
 
 const Recorder: React.FC = () => {
-  const webRTCRecordPluginRef = useRef<any>(null);
   const socket = SocketService.getInstance();
+  const eventsBufferRef = useRef<any[]>([]);
   const videoRef = useRef<HTMLVideoElement>(null);
 
-
   useEffect(() => {
-    // Handle incoming canvas IDs from viewers
-    socket.on('canvas-id', (canvasId: string) => {
-      if (webRTCRecordPluginRef.current) {
-        webRTCRecordPluginRef.current.setupStream(canvasId);
+    // Buffer to batch events for better performance
+    const flushEvents = () => {
+      if (eventsBufferRef.current.length > 0) {
+        socket.emit('record-events', eventsBufferRef.current);
+        eventsBufferRef.current = [];
       }
-    });
+    };
 
-    // Handle incoming WebRTC signals from viewers
-    socket.on('viewer-signal', (signal: any) => {
-      if (webRTCRecordPluginRef.current) {
-        webRTCRecordPluginRef.current.signalReceive(signal);
-      }
-    });
+    // Periodically flush events
+    const flushInterval = setInterval(flushEvents, 100);
 
-    // Initialize recording
-    const webRTCRecordPlugin = new RRWebPluginCanvasWebRTCRecord({
-      signalSendCallback: (msg: any) => {
-        socket.emit('broadcaster-signal', msg);
-      },
-    });
-
-    webRTCRecordPluginRef.current = webRTCRecordPlugin;
-
+    // Initialize recording with optimized canvas support
     const stopRecord = rrweb.record({
       emit: (event) => {
-        socket.emit('record-event', event);
+        // Add event to buffer
+        eventsBufferRef.current.push(event);
+        
+        // If buffer gets too large, flush immediately
+        if (eventsBufferRef.current.length >= 50) {
+          flushEvents();
+        }
       },
-      plugins: [webRTCRecordPlugin.initPlugin()],
-      recordCanvas: false,
+      recordCanvas: true,
+      sampling: {
+        canvas: 50, // Capture canvas every 50ms
+        scroll: 150, // Reduce scroll event frequency
+        media: 800, // Sample media less frequently
+      },
+      checkoutEveryNms: 10, // Check for updates every 10ms
+      blockClass: 'no-record',
+      inlineStylesheet: true,
+      // Optimize data collection
+      collectFonts: false, // Skip font collection
     });
 
-    // Notify server that we're starting to broadcast
     socket.emit('start-broadcasting');
 
     return () => {
       if(!stopRecord) return;
+
       stopRecord();
-      socket.off('canvas-id');
-      socket.off('viewer-signal');
+      clearInterval(flushInterval);
     };
   }, [socket]);
 
@@ -77,4 +78,4 @@ const Recorder: React.FC = () => {
   );
 };
 
-export default Recorder;
+export default Recorder
